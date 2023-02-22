@@ -138,16 +138,25 @@ class SLlidarNode : public rclcpp::Node
                     return true;
                 case SL_LIDAR_STATUS_ERROR:
                     RCLCPP_ERROR(this->get_logger(),"Error, SLLidar internal error detected. Please reboot the device to retry.");
-                    return false;
+                    return manage_internal_error();
                 default:
                     RCLCPP_ERROR(this->get_logger(),"Error, Unknown internal error detected. Please reboot the device to retry.");
-                    return false;
+                    return manage_internal_error();
 
             }
         } else {
             RCLCPP_ERROR(this->get_logger(),"Error, cannot retrieve SLLidar health code: %x", op_result);
             return false;
         }
+    }
+
+    bool manage_internal_error()
+    {
+        RCLCPP_INFO(this->get_logger(),"Reseting SLLidar");
+        sl_result reset_result;
+        reset_result = drv->reset();
+        RCLCPP_INFO(this->get_logger(),"Reset ok?: %x", reset_result);
+        return true;
     }
 
     bool stop_motor(const std::shared_ptr<std_srvs::srv::Empty::Request> req,
