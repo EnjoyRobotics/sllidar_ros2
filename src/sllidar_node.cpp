@@ -37,6 +37,7 @@
 #include <std_srvs/srv/empty.hpp>
 #include "sl_lidar.h"
 #include "math.h"
+#include <stdlib.h> 
 
 #include <signal.h>
 
@@ -126,7 +127,6 @@ class SLlidarNode : public rclcpp::Node
                     return true;
                 case SL_LIDAR_STATUS_ERROR:
                     RCLCPP_ERROR(this->get_logger(),"Error, SLLidar internal error detected. Please reboot the device to retry.");
-                    return false;
                     return manage_internal_error(drv);
             }
         } else {
@@ -140,10 +140,11 @@ class SLlidarNode : public rclcpp::Node
         RCLCPP_INFO(this->get_logger(),"Rebooting SLLidar");
         sl_result reset_result;
         sl_result op_result;
+        sl_lidar_response_device_health_t healthinfo;
         unsigned int retries = 4;
         while(retries > 0){
             reset_result = drv->reset();
-            sl_lidar_response_device_health_t healthinfo;
+            sleep(6);
             op_result = drv->getHealth(healthinfo);
             if (SL_IS_OK(op_result)) {
                 RCLCPP_INFO(this->get_logger(),"SLLidar health status : %d", healthinfo.status);
