@@ -127,7 +127,7 @@ class SLlidarNode : public rclcpp::Node
         sl_result     op_result;
         sl_lidar_response_device_health_t healthinfo;
         op_result = drv->getHealth(healthinfo);
-        if (SL_IS_OK(op_result)) { 
+        if (SL_IS_OK(op_result)) {
             RCLCPP_INFO(this->get_logger(),"SLLidar health status : %d", healthinfo.status);
             switch (healthinfo.status) {
                 case SL_LIDAR_STATUS_OK:
@@ -138,8 +138,8 @@ class SLlidarNode : public rclcpp::Node
                     return true;
                 case SL_LIDAR_STATUS_ERROR:
                     RCLCPP_ERROR(this->get_logger(),"Error, SLLidar internal error detected. Please reboot the device to retry.");
-                    return manage_internal_error();
-                    // return false;
+                    return false;
+                    return manage_internal_error(drv);
             }
         } else {
             RCLCPP_ERROR(this->get_logger(),"Error, cannot retrieve SLLidar health code: %x", op_result);
@@ -147,13 +147,36 @@ class SLlidarNode : public rclcpp::Node
         }
     }
 
-    bool manage_internal_error()
+    bool manage_internal_error(ILidarDriver * drv)
     {
-        RCLCPP_INFO(this->get_logger(),"Reseting SLLidar");
+        RCLCPP_INFO(this->get_logger(),"Rebooting SLLidar");
         sl_result reset_result;
-        reset_result = drv->reset();
-        RCLCPP_INFO(this->get_logger(),"Reset ok?: %x", reset_result);
-        return true;
+        sl_result op_result;
+        unsigned int retries = 4;
+        while(retries > 0){
+            reset_result = drv->reset();
+            sl_lidar_response_device_health_t healthinfo;
+            op_result = drv->getHealth(healthinfo);
+            if (SL_IS_OK(op_result)) {
+                RCLCPP_INFO(this->get_logger(),"SLLidar health status : %d", healthinfo.status);
+                switch (healthinfo.status) {
+                    case SL_LIDAR_STATUS_OK:
+                    case SL_LIDAR_STATUS_WARNING:
+                        RCLCPP_INFO(this->get_logger(),"Rebooting SLLidar was successful.");
+                        return true;
+                    case SL_LIDAR_STATUS_ERROR:
+                        RCLCPP_ERROR(this->get_logger(),"Rebooting SLLidar was unsuccessful.");
+                        retries--;
+                        continue;
+                }
+            } else {
+                RCLCPP_ERROR(this->get_logger(),"Error, cannot retrieve SLLidar health code: %x", op_result);
+                retries--;
+                continue;
+            }
+        }
+        RCLCPP_ERROR(this->get_logger(),"Rebooting SLLidar was unsuccessful, internal error.");
+        return false;
     }
 
     bool stop_motor(const std::shared_ptr<std_srvs::srv::Empty::Request> req,
