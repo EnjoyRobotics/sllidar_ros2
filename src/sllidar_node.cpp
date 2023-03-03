@@ -37,6 +37,7 @@
 #include <std_srvs/srv/empty.hpp>
 #include "sl_lidar.h"
 #include "math.h"
+#include <stdlib.h> 
 
 #include <signal.h>
 
@@ -66,35 +67,23 @@ class SLlidarNode : public rclcpp::Node
   private:    
     void init_param()
     {
-        this->declare_parameter("channel_type");
-        this->declare_parameter("tcp_ip");
-        this->declare_parameter("tcp_port");
-        this->declare_parameter("udp_ip");
-        this->declare_parameter("udp_port");
-        this->declare_parameter("serial_port");
-        this->declare_parameter("serial_baudrate");
-        this->declare_parameter("frame_id");
-        this->declare_parameter("inverted");
-        this->declare_parameter("angle_compensate");
-        this->declare_parameter("scan_mode");
-        this->declare_parameter("scan_frequency");
-
-        this->get_parameter_or<std::string>("channel_type", channel_type, "serial");
-        this->get_parameter_or<std::string>("tcp_ip", tcp_ip, "192.168.0.7"); 
-        this->get_parameter_or<int>("tcp_port", tcp_port, 20108);
-        this->get_parameter_or<std::string>("udp_ip", udp_ip, "192.168.11.2"); 
-        this->get_parameter_or<int>("udp_port", udp_port, 8089);
-        this->get_parameter_or<std::string>("serial_port", serial_port, "/dev/ttyUSB0"); 
-        this->get_parameter_or<int>("serial_baudrate", serial_baudrate, 1000000/*256000*/);//ros run for A1 A2, change to 256000 if A3
-        this->get_parameter_or<std::string>("frame_id", frame_id, "laser_frame");
-        this->get_parameter_or<bool>("inverted", inverted, false);
-        this->get_parameter_or<bool>("angle_compensate", angle_compensate, false);
-        this->get_parameter_or<std::string>("scan_mode", scan_mode, std::string());
+        channel_type = this->declare_parameter<std::string>("channel_type", "serial");
+        tcp_ip = this->declare_parameter<std::string>("tcp_ip","192.168.0.7");
+        tcp_port = this->declare_parameter<int>("tcp_port", 20108);
+        udp_ip = this->declare_parameter<std::string>("udp_ip", "192.168.11.2");
+        udp_port = this->declare_parameter<int>("udp_port",8089);
+        serial_port = this->declare_parameter<std::string>("serial_port", "/dev/ttyUSB0");
+        serial_baudrate = this->declare_parameter<int>("serial_baudrate", 1000000);
+        frame_id = this->declare_parameter<std::string>("frame_id", "laser_frame");
+        inverted = this->declare_parameter<bool>("inverted", false);
+        angle_compensate = this->declare_parameter<bool>("angle_compensate", false);
+        scan_mode = this->declare_parameter<std::string>("scan_mode","DenseBoost");
         if(channel_type == "udp")
-            this->get_parameter_or<float>("scan_frequency", scan_frequency, 20.0);
-        else
-            this->get_parameter_or<float>("scan_frequency", scan_frequency, 10.0);
-    }
+          scan_frequency = this->declare_parameter<float>("scan_frequency", 20.0);
+        else 
+          scan_frequency = this->declare_parameter<float>("scan_frequency", 10.0);
+
+        }
 
     bool getSLLIDARDeviceInfo(ILidarDriver * drv)
     {
@@ -127,7 +116,7 @@ class SLlidarNode : public rclcpp::Node
         sl_result     op_result;
         sl_lidar_response_device_health_t healthinfo;
         op_result = drv->getHealth(healthinfo);
-        if (SL_IS_OK(op_result)) { 
+        if (SL_IS_OK(op_result)) {
             RCLCPP_INFO(this->get_logger(),"SLLidar health status : %d", healthinfo.status);
             switch (healthinfo.status) {
                 case SL_LIDAR_STATUS_OK:
@@ -138,12 +127,45 @@ class SLlidarNode : public rclcpp::Node
                     return true;
                 case SL_LIDAR_STATUS_ERROR:
                     RCLCPP_ERROR(this->get_logger(),"Error, SLLidar internal error detected. Please reboot the device to retry.");
-                    return false;
+                    return manage_internal_error(drv);
             }
         } else {
             RCLCPP_ERROR(this->get_logger(),"Error, cannot retrieve SLLidar health code: %x", op_result);
             return false;
         }
+    }
+
+    bool manage_internal_error(ILidarDriver * drv)
+    {
+        RCLCPP_INFO(this->get_logger(),"Rebooting SLLidar");
+        sl_result reset_result;
+        sl_result op_result;
+        sl_lidar_response_device_health_t healthinfo;
+        unsigned int retries = 4;
+        while(retries > 0){
+            reset_result = drv->reset();
+            sleep(6);
+            op_result = drv->getHealth(healthinfo);
+            if (SL_IS_OK(op_result)) {
+                RCLCPP_INFO(this->get_logger(),"SLLidar health status : %d", healthinfo.status);
+                switch (healthinfo.status) {
+                    case SL_LIDAR_STATUS_OK:
+                    case SL_LIDAR_STATUS_WARNING:
+                        RCLCPP_INFO(this->get_logger(),"Rebooting SLLidar was successful.");
+                        return true;
+                    case SL_LIDAR_STATUS_ERROR:
+                        RCLCPP_ERROR(this->get_logger(),"Rebooting SLLidar was unsuccessful.");
+                        retries--;
+                        continue;
+                }
+            } else {
+                RCLCPP_ERROR(this->get_logger(),"Error, cannot retrieve SLLidar health code: %x", op_result);
+                retries--;
+                continue;
+            }
+        }
+        RCLCPP_ERROR(this->get_logger(),"Rebooting SLLidar was unsuccessful, internal error.");
+        return false;
     }
 
     bool stop_motor(const std::shared_ptr<std_srvs::srv::Empty::Request> req,
