@@ -35,6 +35,10 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <std_srvs/srv/empty.hpp>
+#include <diagnostic_updater/diagnostic_updater.hpp>
+#include <diagnostic_updater/publisher.hpp>
+#include <diagnostic_msgs/msg/diagnostic_status.hpp>
+
 #include "sl_lidar.h"
 #include "math.h"
 
@@ -56,7 +60,7 @@ class SLlidarNode : public rclcpp::Node
 {
   public:
     SLlidarNode()
-    : Node("sllidar_node")
+    : Node("sllidar_node"), diagnostic_updater_(this)
     {
 
       scan_pub = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", rclcpp::QoS(rclcpp::KeepLast(10)));
@@ -77,7 +81,7 @@ class SLlidarNode : public rclcpp::Node
         this->declare_parameter<bool>("inverted", false);
         this->declare_parameter<bool>("angle_compensate", false);
         this->declare_parameter<std::string>("scan_mode",std::string());
-        this->declare_parameter<float>("scan_frequency",10);
+        this->declare_parameter<double>("scan_frequency",10);
 
         this->get_parameter_or<std::string>("channel_type", channel_type, "serial");
         this->get_parameter_or<std::string>("tcp_ip", tcp_ip, "192.168.0.7");
@@ -91,9 +95,9 @@ class SLlidarNode : public rclcpp::Node
         this->get_parameter_or<bool>("angle_compensate", angle_compensate, false);
         this->get_parameter_or<std::string>("scan_mode", scan_mode, std::string());
         if(channel_type == "udp")
-            this->get_parameter_or<float>("scan_frequency", scan_frequency, 20.0);
+            this->get_parameter_or<double>("scan_frequency", scan_frequency, 20.0);
         else
-            this->get_parameter_or<float>("scan_frequency", scan_frequency, 10.0);
+            this->get_parameter_or<double>("scan_frequency", scan_frequency, 10.0);
     }
 
     bool getSLLIDARDeviceInfo(ILidarDriver * drv)
@@ -116,6 +120,7 @@ class SLlidarNode : public rclcpp::Node
         for (int pos = 0; pos < 16 ;++pos) {
             sprintf(sn_str + (pos * 2),"%02X", devinfo.serialnum[pos]);
         }
+        serial_number = sn_str;
         RCLCPP_INFO(this->get_logger(),"SLLidar S/N: %s",sn_str);
         RCLCPP_INFO(this->get_logger(),"Firmware Ver: %d.%02d",devinfo.firmware_version>>8, devinfo.firmware_version & 0xFF);
         RCLCPP_INFO(this->get_logger(),"Hardware Rev: %d",(int)devinfo.hardware_version);
@@ -191,6 +196,20 @@ class SLlidarNode : public rclcpp::Node
         }
 
         return true;
+    }
+
+    void check_connection(diagnostic_updater::DiagnosticStatusWrapper & stat)
+    {
+        if(!drv)
+            return;
+        if(drv->isConnected())
+        {
+            stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "connection is ok");
+        }
+        else
+        {
+            stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "connection lost");
+        }
     }
 
     static float getAngle(const sl_lidar_response_measurement_node_hq_t& node)
@@ -305,6 +324,18 @@ public:
         start_motor_service = this->create_service<std_srvs::srv::Empty>("start_motor",
                                 std::bind(&SLlidarNode::start_motor,this,std::placeholders::_1,std::placeholders::_2));
 
+        diagnostic_updater_.add("Connection", this, &SLlidarNode::check_connection);
+        if (!serial_number.empty()) {
+            diagnostic_updater_.setHardwareID(serial_number);
+        }
+
+        scan_pub_freq_= std::make_shared<diagnostic_updater::TopicDiagnostic>(
+            "scan", \
+            std::ref(diagnostic_updater_), \
+            diagnostic_updater::FrequencyStatusParam(&scan_frequency, &scan_frequency, 0.1, 1), \
+            diagnostic_updater::TimeStampStatusParam(-0.1, 0.1)
+            );
+
         drv->setMotorSpeed();
 
         LidarScanMode current_scan_mode;
@@ -396,6 +427,8 @@ public:
                                 angle_min, angle_max, max_distance,
                                 frame_id);
 
+                        scan_pub_freq_->tick(end_scan_time);
+
                         if (angle_compensate_nodes) {
                             delete[] angle_compensate_nodes;
                             angle_compensate_nodes = nullptr;
@@ -446,6 +479,10 @@ public:
     rclcpp::Service<std_srvs::srv::Empty>::SharedPtr start_motor_service;
     rclcpp::Service<std_srvs::srv::Empty>::SharedPtr stop_motor_service;
 
+    diagnostic_updater::Updater diagnostic_updater_;
+    std::shared_ptr<diagnostic_updater::TopicDiagnostic> scan_pub_freq_;
+    std::string serial_number;
+
     std::string channel_type;
     std::string tcp_ip;
     std::string udp_ip;
@@ -459,7 +496,7 @@ public:
     float max_distance = 8.0;
     size_t angle_compensate_multiple = 1;//it stand of angle compensate at per 1 degree
     std::string scan_mode;
-    float scan_frequency;
+    double scan_frequency;
 
     ILidarDriver * drv;
 };
